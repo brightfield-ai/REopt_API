@@ -26,7 +26,7 @@ Classify the change according to the following categories:
     ##### Removed
     ### Patches
 
-## juliamaster
+## Develop
 ### Minor Updates
 ##### Changed
 - point to the master branch of REopt.jl instead of the latest registered version (temporary solution while resolving Julia Registry issues caused by REopt.jl repo url name change due to lab renaming)
