@@ -26,8 +26,6 @@ jobs:
         env:
           NREL_DEV_API_KEY: ${{ secrets.NREL_DEV_API_KEY }}
         run: ./.github/scripts/make_keys.py.sh 
-      - name: Remove existing base-api-image
-        run: docker rmi docker.io/library/base-api-image:latest || true
       - name: Build containers
         run: docker compose up -d
       - name: Check running containers
