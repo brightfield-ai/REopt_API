@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: base-api-image
+    image: base-api-image:latest
     command:  >
       "celery -A reopt_api worker -l info"
     environment:
@@ -44,10 +44,7 @@ services:
 
   django:
     container_name: django-nojul
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: base-api-image
+    image: base-api-image:latest
     command:  >
       "python manage.py migrate
       && python manage.py runserver 0.0.0.0:8000"
@@ -64,6 +61,8 @@ services:
       - 8000:8000
     volumes:
       - .:/opt/reopt
+    depends_on:
+      - celery
 
 volumes:
   pgdata:
