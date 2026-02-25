@@ -49,12 +49,11 @@ services:
       - db
       - redis
       - julia
+      - celery
     ports:
       - 8000:8000
     volumes:
       - .:/opt/reopt
-    depends_on:
-      - celery
   
   julia:
     container_name: julia_api

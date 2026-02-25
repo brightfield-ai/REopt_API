@@ -57,12 +57,11 @@ services:
     depends_on:
       - db
       - redis
+      - celery
     ports:
       - 8000:8000
     volumes:
       - .:/opt/reopt
-    depends_on:
-      - celery
 
 volumes:
   pgdata:
