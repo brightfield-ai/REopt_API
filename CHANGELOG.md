@@ -29,7 +29,8 @@ Classify the change according to the following categories:
 ## Develop
 ### Minor Updates
 ##### Changed
-- point to the master branch of REopt.jl instead of the latest registered version (temporary solution while resolving Julia Registry issues caused by REopt.jl repo url name change due to lab renaming)
+- refactor docker-compose files so that base-api-image isn't built twice (in celery and django sections), fixing error "image "docker.io/library/base-api-image:latest": already exists"
+- use REopt@0.57.0
 
 ## v3.17.5
 ### Minor Updates
