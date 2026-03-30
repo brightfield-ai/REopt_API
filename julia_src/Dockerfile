@@ -19,4 +19,4 @@ RUN julia --project=/opt/julia_src -e 'import Pkg; Pkg.instantiate();'
 RUN julia --project=/opt/julia_src precompile.jl
 EXPOSE 8081
 
-CMD ["bash"]
+CMD ["julia", "--project=/opt/julia_src", "-e", "include(\"http.jl\")"]
