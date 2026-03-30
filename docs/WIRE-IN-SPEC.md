@@ -167,6 +167,112 @@ Provide **one** of:
 | TOU rates       | `tou_energy_rates_per_kwh` (8760 array)                               |
 | Full URDB JSON  | `urdb_response` (complete URDB rate object)                            |
 
+##### Coincident Peak Demand Charges
+
+In addition to a base rate, `ElectricTariff` supports **coincident peak (CP)
+demand charges** — an extra $/kW charge applied to the maximum grid-purchased
+power during utility-defined peak windows. This is how many utilities bill for
+transmission/capacity costs (e.g. ICAP, TCAP, PLC tags).
+
+Configure CP with two paired fields:
+
+| Field                                    | Type       | Default | Description |
+| ---------------------------------------- | ---------- | ------- | ----------- |
+| `coincident_peak_load_active_time_steps` | `[[int]]`  | `[[]]`  | Array of arrays. Each inner array is a set of **1-indexed** hourly time steps that define one CP period. |
+| `coincident_peak_load_charge_per_kw`     | `[float]`  | `[]`    | $/kW charge for each CP period. Length **must** match the outer array length of `coincident_peak_load_active_time_steps`. |
+
+**How it works:**
+
+- The number of entries in `coincident_peak_load_charge_per_kw` defines the
+  number of CP periods.
+- For each period *p*, the optimizer finds the **maximum grid purchase** across
+  the time steps listed in `coincident_peak_load_active_time_steps[p]`, then
+  charges `coincident_peak_load_charge_per_kw[p]` × that peak ($/kW).
+- CP charges are a first-class cost component — they flow into the lifecycle
+  cost objective alongside energy charges, demand charges, fixed charges, and
+  export benefits. The optimizer can dispatch battery storage or shift load to
+  reduce peak grid purchases during CP windows.
+- If `coincident_peak_load_charge_per_kw` is empty (the default), CP
+  constraints are skipped entirely — zero cost impact.
+
+**Validation rules:**
+
+- Time steps are **1-indexed** (1 = first hour of the year), not 0-indexed.
+- The outer array length of `coincident_peak_load_active_time_steps` must
+  equal the length of `coincident_peak_load_charge_per_kw`. A mismatch
+  returns a `400` error.
+
+**Example — two CP periods:**
+
+```json
+"ElectricTariff": {
+  "urdb_label": "5e162e2a5457a3d50873e3af",
+  "coincident_peak_load_active_time_steps": [
+    [1, 2, 100],
+    [6000, 7000]
+  ],
+  "coincident_peak_load_charge_per_kw": [10.0, 5.0]
+}
+```
+
+This defines:
+- **Period 1:** $10/kW on the peak grid demand during hours 1, 2, and 100
+- **Period 2:** $5/kW on the peak grid demand during hours 6000 and 7000
+
+**CP output fields** (returned in `results.ElectricTariff`):
+
+| Output Field                                | Description                                           |
+| ------------------------------------------- | ----------------------------------------------------- |
+| `year_one_coincident_peak_cost_before_tax`  | Year-1 CP charge ($)                                  |
+| `lifecycle_coincident_peak_cost_after_tax`  | Present-value lifecycle CP charge after tax ($)        |
+
+Both values roll into `year_one_bill_before_tax` and the total lifecycle cost / NPV.
+
+##### Fixing Battery Size (Pre-Existing Storage)
+
+`ElectricStorage` does not have an `existing_kw` / `existing_kwh` field.
+Instead, fix a known battery size by **setting `min` equal to `max`** for
+both power and energy. The optimizer will lock the capacity and only optimize
+dispatch (charge/discharge scheduling), while still evaluating the battery's
+financial value from CP shaving, demand charge reduction, energy arbitrage,
+etc.
+
+**Example — lock in a 100 kW / 400 kWh battery:**
+
+```json
+"ElectricStorage": {
+  "min_kw": 100,
+  "max_kw": 100,
+  "min_kwh": 400,
+  "max_kwh": 400
+}
+```
+
+The relevant sizing constraints inside the optimizer are:
+
+```
+min_kw  ≤  battery power (kW)   ≤  max_kw
+min_kwh ≤  battery energy (kWh) ≤  max_kwh
+```
+
+This pattern also works **asymmetrically** — set a non-zero `min` with a
+higher `max` to represent an existing battery that the optimizer can expand:
+
+```json
+"ElectricStorage": {
+  "min_kw": 100,
+  "max_kw": 500,
+  "min_kwh": 400,
+  "max_kwh": 2000
+}
+```
+
+This says: "I already have 100 kW / 400 kWh — let the optimizer add up to
+400 kW / 1600 kWh more if cost-effective."
+
+The same `min` / `max` pattern applies to other technologies (`PV`, `Wind`,
+`Generator`, etc.) via their respective `min_kw` / `max_kw` fields.
+
 ### 2.4 Response — `200 OK`
 
 ```json
