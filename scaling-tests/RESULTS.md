@@ -30,6 +30,119 @@ follow-up.
 
 ---
 
+## Cold start — sysimage image
+
+**Image:** `reopt-julia:sysimage` (built from `julia_src/Dockerfile.sysimage`, 5.26GB)
+**Sysimage:** `/opt/julia_src/reopt_sysimage.so`, **599.8 MB**
+**Build time:** sysimage trace ~18s + incremental compile ~118s on top of bare's
+~5min instantiate ⇒ total ~10 min added to CI.
+
+**Measurement:** same `time_to_healthy.sh` against the sysimage image.
+
+**Result:** `READY in 5.98s` — **0.56s faster than bare (≈8%)**.
+
+**This number is smaller than expected and worth interpreting carefully.**
+
+Most of the 5.98s isn't `using` statements — it's:
+1. Julia process startup (~0.5s, sysimage doesn't help)
+2. `DotEnv.load!()` and other I/O (~unchanged)
+3. `include("os_solvers.jl")` parses + lowers a file (~unchanged)
+4. `HTTP.serve()` opening the socket (~unchanged)
+
+The sysimage win on package-load time *is* real (the `using` block drops from
+seconds to ~0), but it's small relative to the constant-cost startup pieces
+the sysimage can't shorten.
+
+**Where the sysimage actually pays off is the first `POST /job`** — JuMP +
+MathOptInterface + the chosen solver get specialized on the user's input
+shape, and that JIT pass on a bare image is what eats minutes. The
+`@compile_workload` block in `sysimage/workload.jl` (one tiny LP and MIP per
+solver) bakes those specialized methods into the sysimage, so the first real
+solve skips most of the work.
+
+**This benchmark does not capture that win.** A first-solve benchmark needs:
+- A representative REopt input fixture (candidates exist in
+  `reoptjl/test/posts/` — `pv_cost_update.json` at 382B and
+  `existing_boiler.json` at 570B are small but may not be valid `/reopt`
+  payloads; `all_inputs_test.json` at 16KB is a more likely working scenario).
+- A bash script that boots a container, waits for `/health`, then times the
+  first `POST /reopt` with the fixture body.
+- A second identical POST to measure the steady-state warm time and confirm
+  the first run was paying JIT cost.
+
+Recommended next benchmark: `first_solve_time.sh <image> <fixture>`.
+
+**What we have proved with these two numbers:**
+1. The sysimage build pipeline is mechanically correct (image builds, starts,
+   serves `/health`).
+2. The `@compile_workload` trace runs without errors and bakes a 600MB
+   sysimage of legitimate compiled methods.
+3. Startup-side cold start is small either way — so warming a pool for
+   "instant `/health` response" was never going to be the lever. The lever
+   is sysimage + warm pool for "instant first solve."
+
+---
+
+## Cold start — live Cloud Run (the real prod-shape numbers)
+
+Local Docker measurements are dwarfed by Cloud Run's actual cold-start cost
+because real cold start includes: control-plane provisioning, container
+image pull from Artifact Registry (3.9GB / 5.3GB depending on variant),
+VM micro-instance boot, gVisor/gen2 init, then finally Julia startup.
+
+Probed two deployed services with 15–25 concurrent `GET /health` to force
+scale-up beyond the warm-pool floor (`containerConcurrency=1`, `minScale=1`).
+
+### reopt-julia (bf-platform-mvp-dev, image tag 76560cf1, BARE)
+
+Args: `--project=/opt/julia_src -e include("http.jl")` — no sysimage.
+
+25 concurrent /health:
+- 24 hit warm instances: **0.56–0.61s**
+- 1 forced cold start: **59.25s**
+
+### reopt-julia-fast (bf-platform-dev-1, SYSIMAGE)
+
+Args: `--project=/opt/julia_src -J/opt/julia_src/sys_reopt.so --sysimage-native-code=yes -e include("http.jl")` — **already has a sysimage in production**.
+
+15 concurrent /health:
+- 11 hit warm instances: **0.40–0.44s**
+- 1 borderline: 1.47s
+- 3 forced cold starts: **21.31s, 21.34s, 21.57s**
+
+### The headline number
+
+**Sysimage cuts Cloud Run cold start from ~59s to ~21s — a 38s reduction (≈64%) on the same shape, same payload (a 24-byte `/health` response).**
+
+That's just the startup side. First-solve will widen the gap further because
+`reopt-julia-fast`'s `sys_reopt.so` has JuMP+solver methods already specialized.
+We didn't measure first-solve here (fixture rabbit hole — see Phase 1 note),
+but the architectural conclusion is unchanged: **sysimage is the single
+highest-leverage cold-start fix, validated in production today.**
+
+### Where the sysimage build source lives
+
+It doesn't, in this repo. `git log --all -- julia_src` shows no
+`PackageCompiler` / `create_sysimage` / `sys_reopt` history. The
+`reopt-julia-fast` Cloud Run image was built off-tree (manual one-off or a
+branch we don't have). The `julia_src/Dockerfile.sysimage` and
+`julia_src/sysimage/` added in this branch are the first in-tree
+reproducible build of that artifact — so the AWS Nomad migration doesn't
+need to reverse-engineer what's running in prod.
+
+### What this means for the Nomad migration
+
+1. Ship the in-tree sysimage build as part of the migration (this branch).
+2. Set `minScale`-equivalent at the Nomad layer = warm-pool fixed count.
+3. With sysimage cold start ≈ 21s, Nomad `healthy_deadline = "2m"` is
+   comfortably overprovisioned. Without sysimage we'd need `healthy_deadline`
+   north of 90s and would still see noisy timeouts.
+4. The custom scaler's `MIN_WARM` floor matters more than the policy
+   sophistication — every cold start the scaler creates is ~21s of latency
+   added to whichever request triggered it.
+
+---
+
 ## Scaler policy — laptop, fake-julia + Docker backend
 
 **Setup**
