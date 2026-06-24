@@ -4,6 +4,32 @@ Captured runs and what they prove. Append a new section each time a test is run.
 
 ---
 
+## Cold start — bare image (baseline)
+
+**Image:** `reopt-julia:bare` (built from existing `julia_src/Dockerfile`, 3.91GB)
+
+**Measurement:** `time_to_healthy.sh reopt-julia:bare` — wall-clock from
+`docker run` until `GET /health` returns 200.
+
+**Result:** `READY in 6.54s`
+
+**Important caveat — what this number IS and ISN'T:**
+- ✅ IS: time for Julia to import packages and start the HTTP server.
+- ❌ IS NOT: time until the first `POST /job` succeeds.
+
+The `/health` endpoint just returns 200 — it doesn't construct a JuMP model,
+invoke a solver, or exercise any REopt code paths. The "multi-minute cold
+start" described informally is almost certainly time-to-first-successful-solve,
+where JIT specialization of JuMP + MathOptInterface + the chosen solver
+dominates on the first real request.
+
+The sysimage A/B that follows compares `/health` time, which captures the
+startup-side win. To quantify the *first-solve* win we'd need a representative
+REopt input fixture and a benchmark that POSTs to `/job` — recommended as a
+follow-up.
+
+---
+
 ## Scaler policy — laptop, fake-julia + Docker backend
 
 **Setup**
