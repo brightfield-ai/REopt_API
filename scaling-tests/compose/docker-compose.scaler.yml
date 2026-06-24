@@ -1,0 +1,43 @@
+# Scaler-policy smoke test.
+#
+# Brings up Redis + fake-julia + a small worker pool. The scaler runs on the
+# host so it can invoke `docker compose scale` against this file — see
+# scaling-tests/README.md.
+#
+# Start with:
+#   docker compose -f docker-compose.scaler.yml up -d --build \
+#       --scale fake-julia=2 --scale worker=5
+#
+# Flow per request:
+#   load-gen --(LPUSH "celery")--> redis
+#   worker  --(BLPOP "celery")--> redis
+#   worker  --(POST /job)--> fake-julia
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  fake-julia:
+    build:
+      context: ../fake-julia
+    environment:
+      - SOLVE_SECONDS=10
+      - SOLVE_JITTER=1
+    expose:
+      - "8081"
+
+  worker:
+    image: python:3.12-slim
+    command: >
+      sh -c "pip install --quiet redis requests &&
+             python /app/worker.py"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - JULIA_URL=http://fake-julia:8081/job
+    volumes:
+      - ./worker.py:/app/worker.py:ro
+    depends_on:
+      - redis
+      - fake-julia
