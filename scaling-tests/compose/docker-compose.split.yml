@@ -1,0 +1,80 @@
+# Split-architecture smoke test using the REAL Django + Celery + Julia images.
+#
+# Validates that the existing JULIA_HOST env var (already at reo/src/run_jump_model.py:63)
+# correctly routes Celery's HTTP calls to a Julia service running in a separate
+# container — i.e. that the architectural split is mechanically trivial.
+#
+# Start with multiple Julia replicas:
+#   docker compose -f docker-compose.split.yml up -d --build --scale julia=3
+#
+# Submit a real REopt job via the API and verify it lands on one of the
+# Julia replicas (check `docker compose logs julia` — the host field will
+# vary across requests if Docker DNS round-robin distributes them).
+#
+# NOTE: Docker Compose's embedded DNS returns replica IPs in rotating order
+# per query, which gives reasonable distribution because Python `requests`
+# closes the connection after each call (no Session). In the Voltus Nomad
+# cluster, Traefik fronts the Julia service and provides proper load
+# balancing — see Voltus infrastructure docs.
+
+services:
+  redis:
+    image: redis:7-alpine
+
+  db:
+    image: postgres
+    environment:
+      - POSTGRES_USER=reopt
+      - POSTGRES_PASSWORD=reopt
+      - POSTGRES_DB=reopt
+
+  julia:
+    image: reopt-julia:bare
+    # Built separately via `docker build -t reopt-julia:bare ../../julia_src/`
+    # (or reopt-julia:sysimage once the sysimage Dockerfile is validated).
+    environment:
+      - XPRESS_JL_SKIP_LIB_CHECK=True
+      - XPRESS_INSTALLED=False
+    expose:
+      - "8081"
+
+  celery:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: base-api-image:latest
+    command: >
+      sh -c "celery -A reopt_api worker -l info"
+    environment:
+      - APP_ENV=local
+      - SQL_HOST=db
+      - SQL_PORT=5432
+      - REDIS_HOST=redis
+      - JULIA_HOST=julia
+    volumes:
+      - ../..:/opt/reopt
+    depends_on:
+      - db
+      - redis
+      - julia
+
+  django:
+    image: base-api-image:latest
+    command: >
+      sh -c "python manage.py migrate
+             && python manage.py runserver 0.0.0.0:8000"
+    environment:
+      - APP_ENV=local
+      - SQL_HOST=db
+      - SQL_PORT=5432
+      - REDIS_HOST=redis
+      - JULIA_HOST=julia
+    depends_on:
+      - db
+      - redis
+      - celery
+      - julia
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../..:/opt/reopt
