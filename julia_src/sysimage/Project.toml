@@ -1,0 +1,5 @@
+# Isolated build-only environment. PackageCompiler is heavy and we don't want
+# it in the runtime project's dependency closure. The build script activates
+# this env, then targets the main julia_src project as the sysimage source.
+[deps]
+PackageCompiler = "9b87118b-4619-50d2-8e1e-99f35a4d4d9d"
